@@ -17,18 +17,16 @@ def _motion(
     ctx: BrowserContext, challenger: typing.Union[AudioChallenger, VisualChallenger], style: str
 ):
     page = ctx.new_page()
-    # 访问测试站点
+    # Visit the test site
     page.goto("https://www.google.com/recaptcha/api2/demo")
-    # 检测到当前页面存弹出的 reCAPTCHA checkbox
+    # A pop-up reCAPTCHA checkbox is detected on the current page
     if not challenger.utils.face_the_checkbox(page):
         return
-    # 启动人机挑战
+    # Start man-machine challenge
     start = time.time()
     is_success = challenger.anti_recaptcha(page)
-    challenger.log(
-        f"演示结束，挑战总耗时: {round(time.time() - start, 2)}s - "
-        f"{style=} {is_success=} {challenger.response=}"
-    )
+    challenger.log(f"演示结束，挑战总耗时: {round(time.time() - start, 2)}s - " f"{style=} {is_success=}")
+    logger.success(f"{challenger.response=}")
 
 
 @logger.catch()

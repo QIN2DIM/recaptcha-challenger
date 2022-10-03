@@ -111,9 +111,7 @@ class ArmorKernel:
         """格式化日志信息"""
         if not self.debug:
             return
-
-        motive = "Challenge"
-        flag_ = f">> {motive} [{self.action_name}] {message}"
+        flag_ = message
         if params:
             flag_ += " - "
             flag_ += " ".join([f"{i[0]}={i[1]}" for i in params.items()])
@@ -170,7 +168,7 @@ class AudioChallenger(ArmorKernel):
         )
 
     def get_audio_download_link(self, fl: FrameLocator) -> typing.Optional[str]:
-        """返回声源文件的下载地址"""
+        """Returns the download address of the sound source file."""
         for _ in range(5):
             with suppress(TimeoutError):
                 self.log("Play challenge audio")
@@ -183,7 +181,7 @@ class AudioChallenger(ArmorKernel):
                         "Your computer or network may be sending automated queries."
                     )
 
-        # 定位声源文件 url
+        # Locate the sound source file url
         try:
             audio_url = fl.locator("#audio-source").get_attribute("src")
         except TimeoutError:
@@ -192,47 +190,48 @@ class AudioChallenger(ArmorKernel):
 
     def handle_audio(self, audio_url: str) -> str:
         """
-        reCAPTCHA Audio 音频文件的定位、下载、转码
+        Location, download and transcoding of audio files
 
-        :param audio_url: reCAPTCHA Audio 链接地址
+        :param audio_url: reCAPTCHA Audio Link address
         :return:
         """
-        # 拼接音频缓存文件路径
+        # Splice audio cache file path
         timestamp_ = int(time.time())
         path_audio_mp3 = os.path.join(self.dir_challenge_cache, f"audio_{timestamp_}.mp3")
         path_audio_wav = os.path.join(self.dir_challenge_cache, f"audio_{timestamp_}.wav")
 
-        # 将声源文件下载到本地
+        # Download the sound source file to the local
         self.log("Downloading challenge audio")
         _request_asset(audio_url, path_audio_mp3)
 
-        # 转换音频格式 mp3 --> wav
+        # Convert audio format mp3 --> wav
         self.log("Audio transcoding MP3 --> WAV")
         pydub.AudioSegment.from_mp3(path_audio_mp3).export(path_audio_wav, format="wav")
         self.log("Transcoding complete", path_audio_wav=path_audio_wav)
 
-        # 返回 wav 格式的音频文件 增加识别精度
+        # Returns audio files in wav format to increase recognition accuracy
         return path_audio_wav
 
     def parse_audio_to_text(self, path_audio_wav: str) -> str:
         """
-        声纹识别，音频转文本
+        Speech recognition, audio to text
 
-        :param path_audio_wav: reCAPTCHA Audio 音频文件的本地路径（wav格式）
-        :exception speech_recognition.RequestError: 需要挂起代理
-        :exception http.client.IncompleteRead: 网速不佳，音频文件未下载完整就开始解析
+        :param path_audio_wav: reCAPTCHA Audio The local path of the audio file（.wav）
+        :exception speech_recognition.RequestError: Need to suspend proxy
+        :exception http.client.IncompleteRead: Poor Internet Speed，
         :return:
         """
-        # 音频文件的国际化语言格式，默认 en-US 美式发音。非必要参数，但可增加模型精度。
+        # Internationalized language format of audio files, default en-US American pronunciation.
         language = "en-US"
 
-        # 将音频读入并切割成帧矩阵
+        # Read audio into and cut into a frame matrix
         recognizer = Recognizer()
         audio_file = AudioFile(path_audio_wav)
         with audio_file as stream:
             audio = recognizer.record(stream)
 
-        # 返回短音频对应的文本(str)，en-US 情况下为不成句式的若干个单词
+        # Returns the text corresponding to the short audio(str)，
+        # en-US Several words that are not sentence patterns
         self.log("Parsing audio file ... ")
         audio_answer = recognizer.recognize_google(audio, language=language)
         self.log("Analysis completed", audio_answer=audio_answer)
@@ -241,10 +240,13 @@ class AudioChallenger(ArmorKernel):
 
     def submit_text(self, fl: FrameLocator, text: str) -> typing.Optional[bool]:
         """
-        提交 reCAPTCHA 人机验证，需要传入 answer 文本信息，需要 action 停留在可提交界面
+        Submit reCAPTCHA man-machine verification
 
-        :param fl: 为尽可能消除 driver 指纹特征，可使用  undetected_chromedriver.v2 替代 selenium
-        :param text: 声纹识别数据
+        The answer text information needs to be passed in,
+        and the action needs to stay in the submittable frame-page.
+
+        :param fl:
+        :param text:
         :return:
         """
         with suppress(NameError, TimeoutError):
@@ -257,13 +259,13 @@ class AudioChallenger(ArmorKernel):
         return False
 
     def is_correct(self, page: Page) -> typing.Optional[str]:
-        """检查挑战是否通过"""
+        """Check if the challenge passes"""
         with suppress(TimeoutError):
             err_resp = page.locator(".rc-audiochallenge-error-message")
             if msg := err_resp.text_content(timeout=2000):
-                self.log("挑战失败", err_message=msg)
+                self.log("Challenge failed", err_message=msg)
             return self.CHALLENGE_RETRY
-        self.log("挑战成功")
+        self.log("Challenge success")
         self._response = page.evaluate("grecaptcha.getResponse()")
         return self.CHALLENGE_SUCCESS
 
@@ -271,19 +273,20 @@ class AudioChallenger(ArmorKernel):
         if super().anti_recaptcha(page) is not True:
             return
 
-        # [⚔] 注册挑战框架
+        # [⚔] Register Challenge Framework
         frame_locator = page.frame_locator(self.bframe)
-        # [⚔] 获取音频文件下载链接
+        # [⚔] Get the audio file download link
         audio_url: str = self.get_audio_download_link(frame_locator)
-        # [⚔] 音频转码（MP3 --> WAV）增加识别精度
+        # [⚔] Audio transcoding（MP3 --> WAV）increase recognition accuracy
         path_audio_wav: str = self.handle_audio(audio_url=audio_url)
-        # [⚔] 声纹识别 --(output)--> 文本数据
+        # [⚔] Speech to text
         audio_answer: str = self.parse_audio_to_text(path_audio_wav)
-        # [⚔] 定位输入框并填写文本数据
+        # [⚔] Locate the input box and fill in the text
         if self.submit_text(frame_locator, text=audio_answer) is not True:
-            self.log("reCAPTCHA 挑战提交失败")
+            self.log("reCAPTCHA Challenge submission failed")
             raise ChallengeTimeoutException
-        # 判断挑战是否成功
+        # Judging whether the challenge is successful or not
+        # Get response of the reCAPTCHA
         return self.is_correct(page)
 
 
@@ -294,6 +297,7 @@ class VisualChallenger(ArmorKernel):
     FEATURE_DYNAMIC = "rc-imageselect-dynamic-selected"
     FEATURE_SELECTED = "rc-imageselect-tileselected"
 
+    # TODO
     # crosswalks
     # stairs
     # vehicles
@@ -356,11 +360,12 @@ class VisualChallenger(ArmorKernel):
 
     def reload(self, page: Page):
         """Overload Visual Challenge :: In the BFrame"""
+        self.log("reload challenge")
         page.frame_locator(self.bframe).locator("#recaptcha-reload-button").click()
         page.wait_for_timeout(1000)
 
     def check_oncall_task(self, page: Page) -> typing.Optional[str]:
-        """识别任务类型：检测任务或分类任务"""
+        """Identify the type of task：Detection task or classification task"""
         # Usually, when the number of clickable pictures is 16, it is an object detection task,
         # and when the number of clickable pictures is 9, it is a classification task.
         image_objs = page.frame_locator(self.bframe).locator("//td[@aria-label]")
@@ -379,7 +384,6 @@ class VisualChallenger(ArmorKernel):
         # Captcha prompts
         label_obj = page.frame_locator(self.bframe).locator("//strong")
         self.prompt = label_obj.text_content()
-
         # Parse prompts to model label
         try:
             _label = split_prompt_message(prompt_message=self.prompt)
@@ -413,7 +417,7 @@ class VisualChallenger(ArmorKernel):
     def check_positive_element(
         self, sample: Locator, model, screenshot: typing.Optional[bool] = False
     ) -> typing.Optional[bool]:
-        """审查阳性样本"""
+        """Review positive samples"""
         result = model.solution(img_stream=sample.screenshot(), label=self.label_alias[self.label])
 
         # Pass: Hit at least one object
@@ -435,8 +439,8 @@ class VisualChallenger(ArmorKernel):
                 return
             for i in target:
                 locator_ = f'//td[@tabindex="{i + 4}"]'
-
-                # 渐变控制，尽可能确保送入模型的图片的曝光正确
+                # Gradient control
+                # Ensure that the pictures fed into the model are correctly exposed.
                 with suppress(TimeoutError, AssertionError):
                     expect(page.frame_locator(self.bframe).locator(locator_)).to_have_attribute(
                         "class", self.FEATURE_DYNAMIC
@@ -465,7 +469,7 @@ class VisualChallenger(ArmorKernel):
             if result:
                 dynamic_index.append(index)
 
-        # 凛冬将至
+        # Winter is coming
         if is_dynamic:
             hit_dynamic_samples(target=dynamic_index)
         # Submit challenge
@@ -507,18 +511,13 @@ class VisualChallenger(ArmorKernel):
             )
             path_screenshot = self.captcha_screenshot(challenge_container)
             q = quote(self.label, "utf8")
+            issues = f"https://github.com/QIN2DIM/hcaptcha-challenger/issues?q={q}"
             logger.warning(
-                runtime_report(
-                    motive="ALERT",
-                    action_name=self.action_name,
-                    message="Types of challenges not yet scheduled",
-                    label=f"「{self.label}」",
-                    prompt=f"「{self.prompt}」",
-                    screenshot=path_screenshot,
-                    site_link=page.url,
-                    issues=f"https://github.com/QIN2DIM/hcaptcha-challenger/issues?q={q}",
-                )
+                "Types of challenges not yet scheduled - "
+                f"label=「{self.label}」 prompt=「{self.prompt}」 "
+                f"{path_screenshot=} {page.url=} {issues=}"
             )
+
         return self.CHALLENGE_BACKCALL
 
     def anti_recaptcha(self, page: Page):
@@ -553,12 +552,12 @@ class VisualChallenger(ArmorKernel):
         """
         if super().anti_recaptcha(page) is not True:
             return
-        # [⚔] 注册挑战框架
+        # [⚔] Register Challenge Framework
         # TODO: TASK_OBJECT_DETECTION, more label
         for _ in range(3):
-            # [⚔] 跳过目标检测任务以及未准备好的分类任务
+            # [⚔] Skip objects detection tasks and unprepared classification tasks
             for _ in range(10):
-                # [⚔] 获取挑战标签
+                # [⚔] Get challenge labels
                 self.get_label(page)
                 if self._oncall_task == self.TASK_OBJECT_DETECTION:
                     self.reload(page)
@@ -591,18 +590,6 @@ def _request_asset(asset_download_url: str, asset_path: str):
         for chunk in response.iter_content(chunk_size=1024):
             if chunk:
                 file.write(chunk)
-
-
-def runtime_report(action_name: str, motive: str = "RUN", message: str = "", **params) -> str:
-    """格式化输出"""
-    flag_ = f">> {motive} [{action_name}]"
-    if message != "":
-        flag_ += f" {message}"
-    if params:
-        flag_ += " - "
-        flag_ += " ".join([f"{i[0]}={i[1]}" for i in params.items()])
-
-    return flag_
 
 
 def new_challenger(
