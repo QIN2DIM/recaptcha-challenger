@@ -38,9 +38,5 @@ class ElementLocationException(ChallengeException):
     """多语种问题导致的强定位方法失效"""
 
 
-class ChallengeReset(ChallengeException):
-    """人机挑战意外通过"""
-
-
 class LabelNotFoundException(ChallengeException):
     """获取到异常的挑战标签"""
