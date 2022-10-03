@@ -4,36 +4,23 @@
 # Github     : https://github.com/QIN2DIM
 # Description:
 import os
-import random
 import time
 import typing
+from contextlib import suppress
 from urllib.parse import quote
 from urllib.request import getproxies
 
 import pydub
 import requests
 from loguru import logger
-from selenium.common.exceptions import (
-    ElementNotVisibleException,
-    TimeoutException,
-    NoSuchElementException,
-    WebDriverException,
-    StaleElementReferenceException,
-    ElementClickInterceptedException,
-)
-from selenium.webdriver import Chrome
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.remote.webelement import WebElement
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.wait import WebDriverWait
+from playwright.sync_api import Page, Locator, expect, FrameLocator
+from playwright.sync_api import TimeoutError
 from speech_recognition import Recognizer, AudioFile
 
 from .exceptions import (
     AntiBreakOffWarning,
     RiskControlSystemArmor,
     ChallengeTimeoutException,
-    ChallengeReset,
     LabelNotFoundException,
 )
 from .solutions import yolo
@@ -48,23 +35,20 @@ class ArmorUtils:
     """判断遇见 reCAPTCHA 的各种断言方法"""
 
     @staticmethod
-    def fall_in_captcha_login(ctx: Chrome) -> typing.Optional[bool]:
+    def fall_in_captcha_login(page: Page) -> typing.Optional[bool]:
         """检测在登录时遇到的 reCAPTCHA challenge"""
 
     @staticmethod
-    def fall_in_captcha_runtime(ctx: Chrome) -> typing.Optional[bool]:
+    def fall_in_captcha_runtime(page: Page) -> typing.Optional[bool]:
         """检测在运行时遇到的 reCAPTCHA challenge"""
 
     @staticmethod
-    def face_the_checkbox(ctx: Chrome) -> typing.Optional[bool]:
+    def face_the_checkbox(page: Page) -> typing.Optional[bool]:
         """遇见 reCAPTCHA checkbox"""
-        try:
-            WebDriverWait(ctx, 8, ignored_exceptions=WebDriverException).until(
-                EC.presence_of_element_located((By.XPATH, "//iframe[@title='reCAPTCHA']"))
-            )
+        with suppress(TimeoutError):
+            page.frame_locator("//iframe[@title='reCAPTCHA']")
             return True
-        except TimeoutException:
-            return False
+        return False
 
 
 class ArmorKernel:
@@ -89,18 +73,23 @@ class ArmorKernel:
         self.debug = debug
         self.action_name = f"{self.style.title()}Challenge"
 
+        self.bframe = "//iframe[contains(@src,'bframe')]"
+        self._response = ""
+
     @property
     def utils(self):
         return ArmorUtils
 
-    def captcha_screenshot(
-            self, ctx: typing.Union[Chrome, WebElement], name_screenshot: str = None
-    ):
+    @property
+    def response(self):
+        return self._response
+
+    def captcha_screenshot(self, page: typing.Union[Page, Locator], name_screenshot: str = None):
         """
         保存挑战截图，需要在 get_label 之后执行
 
+        :param page:
         :param name_screenshot: filename of the Challenge image
-        :param ctx: Webdriver 或 Element
         :return:
         """
         if hasattr(self, "label_alias") and hasattr(self, "label"):
@@ -115,10 +104,7 @@ class ArmorKernel:
         os.makedirs(_out_dir, exist_ok=True)
 
         # FullWindow screenshot or FocusElement screenshot
-        try:
-            ctx.screenshot(_out_path)
-        except AttributeError:
-            ctx.save_screenshot(_out_path)
+        page.screenshot(path=_out_path)
         return _out_path
 
     def log(self, message: str, **params) -> None:
@@ -133,65 +119,45 @@ class ArmorKernel:
             flag_ += " ".join([f"{i[0]}={i[1]}" for i in params.items()])
         logger.debug(flag_)
 
-    def _activate_recaptcha(self, ctx: Chrome):
+    def _activate_recaptcha(self, page: Page):
         """处理 checkbox 激活 reCAPTCHA"""
         # --> reCAPTCHA iframe
-        WebDriverWait(ctx, 10).until(
-            EC.frame_to_be_available_and_switch_to_it((By.XPATH, "//iframe[@title='reCAPTCHA']"))
+        activator = page.frame_locator("//iframe[@title='reCAPTCHA']").locator(
+            ".recaptcha-checkbox-border"
         )
-
-        # 点击并激活 reCAPTCHA
-        WebDriverWait(ctx, 10, poll_frequency=0.5, ignored_exceptions=NoSuchElementException).until(
-            EC.element_to_be_clickable((By.CLASS_NAME, "recaptcha-checkbox-border"))
-        ).click()
+        activator.click()
         self.log("Active reCAPTCHA")
 
         # Check reCAPTCHA accessible status for the checkbox-result
-        try:
-            status = (
-                WebDriverWait(ctx, 2, poll_frequency=0.1)
-                .until(EC.presence_of_element_located((By.ID, "recaptcha-accessible-status")))
-                .text
-            )
-            if status:
+        with suppress(TimeoutError):
+            if status := page.locator("#recaptcha-accessible-status").text_content(timeout=2000):
                 raise AntiBreakOffWarning(status)
-        except (TimeoutException, AttributeError):
-            pass
-        finally:
-            ctx.switch_to.default_content()
 
-    def _switch_to_style(self, ctx: Chrome) -> typing.Optional[bool]:
+    def _switch_to_style(self, page: Page) -> typing.Optional[bool]:
         """
         切换验证模式 在 anti_checkbox() 执行前使用
-        :param ctx:
+        :param page:
         :raise AntiBreakOffWarning: 无法切换至 <声纹验证模式>
         :return:
         """
-        time.sleep(2)
-
-        # 切换到 reCAPTCHA 验证框架
-        WebDriverWait(ctx, 8).until(
-            EC.frame_to_be_available_and_switch_to_it(
-                (By.XPATH, f"//iframe[contains(@src,'bframe')]")
-            )
-        )
-
+        frame_locator = page.frame_locator(self.bframe)
         # 切换至<声纹验证模式>或停留在<视觉验证模式>
-        self.log("Accept the challenge", style=self.style)
         if self.style == ChallengeStyle.AUDIO:
-            ctx.find_element(By.ID, "recaptcha-audio-button").click()
-            time.sleep(random.uniform(1, 3))
+            switcher = frame_locator.locator("#recaptcha-audio-button")
+            expect(switcher).to_be_visible()
+            switcher.click()
+        self.log("Accept the challenge", style=self.style)
         return True
 
-    def anti_recaptcha(self, ctx: Chrome):
+    def anti_recaptcha(self, page: Page):
         """人机挑战的执行流"""
         # [⚔] 激活 reCAPTCHA 并切换至<声纹验证模式>或<视觉验证模式>
         try:
-            self._activate_recaptcha(ctx)
+            self._activate_recaptcha(page)
         except AntiBreakOffWarning as err:
             logger.info(err)
             return
-        return self._switch_to_style(ctx)
+        return self._switch_to_style(page)
 
 
 class AudioChallenger(ArmorKernel):
@@ -203,29 +169,26 @@ class AudioChallenger(ArmorKernel):
             kwargs=kwargs,
         )
 
-    def get_audio_download_link(
-            self, ctx: Chrome, click_on_player: typing.Optional[bool] = True
-    ) -> typing.Optional[str]:
+    def get_audio_download_link(self, fl: FrameLocator) -> typing.Optional[str]:
         """返回声源文件的下载地址"""
-        if click_on_player:
-            self.log("Play challenge audio")
-            try:
-                ctx.find_element(By.XPATH, "//button[@aria-labelledby]").click()
-            except NoSuchElementException:
-                try:
-                    header_obj = ctx.find_element(By.CLASS_NAME, "rc-doscaptcha-header-text")
-                    if "Try again later" in header_obj.text:
-                        raise ConnectionError("Your computer or network may be sending automated queries.")
-                except NoSuchElementException:
-                    return
+        for _ in range(5):
+            with suppress(TimeoutError):
+                self.log("Play challenge audio")
+                fl.locator("//button[@aria-labelledby]").click(timeout=1000)
+                break
+            with suppress(TimeoutError):
+                header_text = fl.locator(".rc-doscaptcha-header-text").text_content(timeout=1000)
+                if "Try again later" in header_text:
+                    raise ConnectionError(
+                        "Your computer or network may be sending automated queries."
+                    )
 
         # 定位声源文件 url
         try:
-            audio_url = ctx.find_element(By.ID, "audio-source").get_attribute("src")
-        except NoSuchElementException:
+            audio_url = fl.locator("#audio-source").get_attribute("src")
+        except TimeoutError:
             raise RiskControlSystemArmor("Trapped in an inescapable risk control context")
-        else:
-            return audio_url
+        return audio_url
 
     def handle_audio(self, audio_url: str) -> str:
         """
@@ -234,7 +197,6 @@ class AudioChallenger(ArmorKernel):
         :param audio_url: reCAPTCHA Audio 链接地址
         :return:
         """
-
         # 拼接音频缓存文件路径
         timestamp_ = int(time.time())
         path_audio_mp3 = os.path.join(self.dir_challenge_cache, f"audio_{timestamp_}.mp3")
@@ -271,77 +233,58 @@ class AudioChallenger(ArmorKernel):
             audio = recognizer.record(stream)
 
         # 返回短音频对应的文本(str)，en-US 情况下为不成句式的若干个单词
-        self.log("正在解析音频文件 ... ")
+        self.log("Parsing audio file ... ")
         audio_answer = recognizer.recognize_google(audio, language=language)
-        self.log("解析完毕", audio_answer=audio_answer)
+        self.log("Analysis completed", audio_answer=audio_answer)
 
         return audio_answer
 
-    def submit_text(self, ctx: Chrome, text: str) -> typing.Optional[bool]:
+    def submit_text(self, fl: FrameLocator, text: str) -> typing.Optional[bool]:
         """
         提交 reCAPTCHA 人机验证，需要传入 answer 文本信息，需要 action 停留在可提交界面
 
-        :param ctx: 为尽可能消除 driver 指纹特征，可使用  undetected_chromedriver.v2 替代 selenium
+        :param fl: 为尽可能消除 driver 指纹特征，可使用  undetected_chromedriver.v2 替代 selenium
         :param text: 声纹识别数据
         :return:
         """
-        try:
-            # 定位回答框
-            input_field = ctx.find_element(By.ID, "audio-response")
-
-            # 提交文本数据
-            input_field.clear()
-            input_field.send_keys(text.lower())
-
-            # 使用 clear + ENTER 消除控制特征
+        with suppress(NameError, TimeoutError):
+            input_field = fl.locator("#audio-response")
+            input_field.fill("")
+            input_field.fill(text.lower())
             self.log("Submit the challenge")
-            input_field.send_keys(Keys.ENTER)
+            input_field.press("Enter")
             return True
-        except (NameError, NoSuchElementException):
-            return False
+        return False
 
-    def is_correct(self, ctx: Chrome) -> typing.Optional[str]:
+    def is_correct(self, page: Page) -> typing.Optional[str]:
         """检查挑战是否通过"""
-        try:
-            err_message = (
-                WebDriverWait(ctx, 1)
-                .until(
-                    EC.presence_of_element_located(
-                        (By.CLASS_NAME, "rc-audiochallenge-error-message")
-                    )
-                )
-                .text
-            )
-            if err_message:
-                self.log("挑战失败", err_message=err_message)
+        with suppress(TimeoutError):
+            err_resp = page.locator(".rc-audiochallenge-error-message")
+            if msg := err_resp.text_content(timeout=2000):
+                self.log("挑战失败", err_message=msg)
             return self.CHALLENGE_RETRY
-        except TimeoutException:
-            self.log("挑战成功")
-            return self.CHALLENGE_SUCCESS
+        self.log("挑战成功")
+        self._response = page.evaluate("grecaptcha.getResponse()")
+        return self.CHALLENGE_SUCCESS
 
-    def anti_recaptcha(self, ctx: Chrome):
-        if super().anti_recaptcha(ctx) is not True:
+    def anti_recaptcha(self, page: Page):
+        if super().anti_recaptcha(page) is not True:
             return
 
+        # [⚔] 注册挑战框架
+        frame_locator = page.frame_locator(self.bframe)
         # [⚔] 获取音频文件下载链接
-        audio_url: str = self.get_audio_download_link(ctx)
-
+        audio_url: str = self.get_audio_download_link(frame_locator)
         # [⚔] 音频转码（MP3 --> WAV）增加识别精度
         path_audio_wav: str = self.handle_audio(audio_url=audio_url)
-
         # [⚔] 声纹识别 --(output)--> 文本数据
         audio_answer: str = self.parse_audio_to_text(path_audio_wav)
-
         # [⚔] 定位输入框并填写文本数据
-        if self.submit_text(ctx, text=audio_answer) is not True:
+        if self.submit_text(frame_locator, text=audio_answer) is not True:
             self.log("reCAPTCHA 挑战提交失败")
             raise ChallengeTimeoutException
-
-        # 回到 main-frame 否则后续 DOM 操作无法生效
-        ctx.switch_to.default_content()
-
         # 判断挑战是否成功
-        return self.is_correct(ctx)
+        return self.is_correct(page)
 
 
 class VisualChallenger(ArmorKernel):
@@ -384,13 +327,13 @@ class VisualChallenger(ArmorKernel):
     }
 
     def __init__(
-            self,
-            dir_challenge_cache: str,
-            dir_model: str,
-            onnx_prefix: typing.Optional[str] = None,
-            screenshot: typing.Optional[bool] = False,
-            debug: typing.Optional[bool] = True,
-            **kwargs,
+        self,
+        dir_challenge_cache: str,
+        dir_model: str,
+        onnx_prefix: typing.Optional[str] = None,
+        screenshot: typing.Optional[bool] = False,
+        debug: typing.Optional[bool] = True,
+        **kwargs,
     ):
         super().__init__(
             dir_challenge_cache=dir_challenge_cache,
@@ -411,47 +354,31 @@ class VisualChallenger(ArmorKernel):
 
         self.yolo_model = yolo.YOLO(self.dir_model, self.onnx_prefix)
 
-    @staticmethod
-    def reload(ctx: Chrome):
+    def reload(self, page: Page):
         """Overload Visual Challenge :: In the BFrame"""
-        WebDriverWait(ctx, 5).until(
-            EC.element_to_be_clickable((By.ID, "recaptcha-reload-button"))
-        ).click()
-        time.sleep(1)
+        page.frame_locator(self.bframe).locator("#recaptcha-reload-button").click()
+        page.wait_for_timeout(1000)
 
-    def check_oncall_task(self, ctx: Chrome) -> typing.Optional[str]:
+    def check_oncall_task(self, page: Page) -> typing.Optional[str]:
         """识别任务类型：检测任务或分类任务"""
-        try:
-            WebDriverWait(ctx, 10).until(
-                EC.presence_of_element_located((By.XPATH, "//td[@aria-label]"))
-            )
-        except TimeoutException as err:
-            raise RuntimeError("Check task type timeout, need to refresh challenge") from err
-        else:
-            # Usually, when the number of clickable pictures is 16, it is an object detection task,
-            # and when the number of clickable pictures is 9, it is a classification task.
-            image_objs = ctx.find_elements(By.XPATH, "//td[@aria-label]")
-            self._oncall_task = (
-                self.TASK_OBJECT_DETECTION
-                if len(image_objs) > 9
-                else self.TASK_BINARY_CLASSIFICATION
-            )
-            return self._oncall_task
+        # Usually, when the number of clickable pictures is 16, it is an object detection task,
+        # and when the number of clickable pictures is 9, it is a classification task.
+        image_objs = page.frame_locator(self.bframe).locator("//td[@aria-label]")
+        self._oncall_task = (
+            self.TASK_OBJECT_DETECTION
+            if image_objs.count() > 9
+            else self.TASK_BINARY_CLASSIFICATION
+        )
+        return self._oncall_task
 
-    def get_label(self, ctx: Chrome):
+    def get_label(self, page: Page):
         def split_prompt_message(prompt_message: str) -> str:
             prompt_message = prompt_message.strip()
             return prompt_message
 
         # Captcha prompts
-        try:
-            label_obj = WebDriverWait(ctx, 30, ignored_exceptions=ElementNotVisibleException).until(
-                EC.presence_of_element_located((By.TAG_NAME, "strong"))
-            )
-        except TimeoutException:
-            raise ChallengeReset("人机挑战意外通过")
-        else:
-            self.prompt = label_obj.text
+        label_obj = page.frame_locator(self.bframe).locator("//strong")
+        self.prompt = label_obj.text_content()
 
         # Parse prompts to model label
         try:
@@ -461,7 +388,7 @@ class VisualChallenger(ArmorKernel):
         else:
             self.label = _label
             self.log(
-                message="Get label", label=f"「{self.label}」", task=f"{self.check_oncall_task(ctx)}"
+                message="Get label", label=f"「{self.label}」", task=f"{self.check_oncall_task(page)}"
             )
 
     def select_model(self):
@@ -469,44 +396,38 @@ class VisualChallenger(ArmorKernel):
         # label_alias = self.label_alias.get(self.label)
         return self.yolo_model
 
-    def mark_samples(self, ctx: Chrome):
+    def mark_samples(self, page: Page):
         """Get the download link and locator of each challenge image"""
-        samples = ctx.find_elements(By.XPATH, "//td[@aria-label]")
-        if samples:
-            for index, sample in enumerate(samples):
-                fn = f"{int(time.time())}_/Challenge Image {index + 1}.png"
-                self.captcha_screenshot(sample, name_screenshot=fn)
-                self.log("save image", fn=fn)
-
-        image_link = ctx.find_element(By.XPATH, "//td[@aria-label]//img").get_attribute("src")
+        samples = page.frame_locator(self.bframe).locator("//td[@aria-label]")
+        for index in range(samples.count()):
+            fn = f"{int(time.time())}_/Challenge Image {index + 1}.png"
+            self.captcha_screenshot(samples.nth(index), name_screenshot=fn)
+            self.log("save image", fn=fn)
+        image_link = (
+            page.frame_locator(self.bframe)
+            .locator("//td[@aria-label]//img")
+            .first.get_attribute("src")
+        )
         self.log(image_link)
 
     def check_positive_element(
-            self, element: WebElement, model, screenshot: typing.Optional[bool] = False
+        self, sample: Locator, model, screenshot: typing.Optional[bool] = False
     ) -> typing.Optional[bool]:
         """审查阳性样本"""
-        result = model.solution(
-            img_stream=bytes(element.screenshot_as_png), label=self.label_alias[self.label]
-        )
+        result = model.solution(img_stream=sample.screenshot(), label=self.label_alias[self.label])
 
         # Pass: Hit at least one object
         if result:
-            try:
-                time.sleep(random.uniform(0.2, 0.3))
-                element.click()
-            except StaleElementReferenceException:
-                pass
-            except WebDriverException as err:
-                logger.warning(err)
+            sample.click()
 
         # Check result of the challenge.
         if screenshot or self.screenshot:
             _filename = f"{int(time.time())}.{model.flag}.{self.label_alias[self.label]}.png"
-            self.captcha_screenshot(element, name_screenshot=_filename)
+            self.captcha_screenshot(sample, name_screenshot=_filename)
 
         return result
 
-    def challenge(self, ctx: Chrome, model):
+    def challenge(self, page: Page, model):
         """Image classification, element clicks, answer submissions"""
 
         def hit_dynamic_samples(target: list):
@@ -516,95 +437,75 @@ class VisualChallenger(ArmorKernel):
                 locator_ = f'//td[@tabindex="{i + 4}"]'
 
                 # 渐变控制，尽可能确保送入模型的图片的曝光正确
-                start = time.time()
-                WebDriverWait(ctx, 60, poll_frequency=1).until_not(
-                    EC.text_to_be_present_in_element_attribute(
-                        locator=(By.XPATH, locator_), attribute_="class", text_=self.FEATURE_DYNAMIC
+                with suppress(TimeoutError, AssertionError):
+                    expect(page.frame_locator(self.bframe).locator(locator_)).to_have_attribute(
+                        "class", self.FEATURE_DYNAMIC
                     )
-                )
-                time.sleep(time.time() - start)
-
-                dynamic_element = ctx.find_element(By.XPATH, locator_)
-                result_ = self.check_positive_element(element=dynamic_element, model=model)
+                dynamic_element = page.frame_locator(self.bframe).locator(locator_)
+                result_ = self.check_positive_element(sample=dynamic_element, model=model)
                 if not result_:
                     target.remove(i)
             return hit_dynamic_samples(target)
 
         is_dynamic = None
         dynamic_index = []
-        samples = ctx.find_elements(By.XPATH, "//td[@aria-label]")
-        for index, sample in enumerate(samples):
-            result = self.check_positive_element(element=sample, model=model)
+        samples = page.frame_locator(self.bframe).locator("//td[@aria-label]")
+        for index in range(samples.count()):
+            result = self.check_positive_element(sample=samples.nth(index), model=model)
             if is_dynamic is None:
-                try:
-                    motion_status = ctx.find_element(
-                        By.XPATH, f'//td[@tabindex="{index + 4}"]'
-                    ).get_attribute("class")
-                except (NoSuchElementException, AttributeError):
-                    pass
-                else:
-                    if self.FEATURE_SELECTED in motion_status:
-                        is_dynamic = False
-                    elif self.FEATURE_DYNAMIC in motion_status:
-                        is_dynamic = True
+                motion_status = (
+                    page.frame_locator(self.bframe)
+                    .locator(f'//td[@tabindex="{index + 4}"]')
+                    .get_attribute("class")
+                )
+                if self.FEATURE_SELECTED in motion_status:
+                    is_dynamic = False
+                elif self.FEATURE_DYNAMIC in motion_status:
+                    is_dynamic = True
             if result:
                 dynamic_index.append(index)
 
         # 凛冬将至
         if is_dynamic:
             hit_dynamic_samples(target=dynamic_index)
-
         # Submit challenge
-        try:
-            WebDriverWait(ctx, 15).until(
-                EC.element_to_be_clickable((By.XPATH, "//button[@id='recaptcha-verify-button']"))
-            ).click()
-        except ElementClickInterceptedException:
-            pass
-        except WebDriverException as err:
-            logger.exception(err)
+        page.frame_locator(self.bframe).locator("//button[@id='recaptcha-verify-button']").click()
 
-    def check_accessible_status(self, ctx: Chrome) -> typing.Optional[str]:
+    def check_accessible_status(self, page: Page) -> typing.Optional[str]:
         """Judging whether the challenge was successful"""
         try:
-            prompt_obj = WebDriverWait(ctx, 1).until(
-                EC.visibility_of_element_located(
-                    (By.XPATH, "//div[@class='rc-imageselect-error-select-more']")
-                )
+            prompt_obj = page.frame_locator(self.bframe).locator(
+                "//div[@class='rc-imageselect-error-select-more']"
             )
-        except TimeoutException:
+            prompt_obj.wait_for(timeout=1000)
+        except TimeoutError:
             try:
-                prompt_obj = WebDriverWait(ctx, 1).until(
-                    EC.visibility_of_element_located(
-                        (By.CLASS_NAME, "rc-imageselect-incorrect-response")
-                    )
+                prompt_obj = page.frame_locator(self.bframe).locator(
+                    "rc-imageselect-incorrect-response"
                 )
-            except TimeoutException:
+                prompt_obj.wait_for(timeout=1000)
+            except TimeoutError:
                 self.log("挑战成功")
                 return self.CHALLENGE_SUCCESS
 
-        prompts = prompt_obj.text
+        prompts = prompt_obj.text_content()
         return prompts
 
-    def tactical_retreat(self, ctx) -> typing.Optional[str]:
+    def tactical_retreat(self, page: Page) -> typing.Optional[str]:
         """
         「blacklist mode」 skip unchoreographed challenges
-        :param ctx:
+        :param page:
         :return: the screenshot storage path
         """
         if self.label_alias.get(self.label):
             return self.CHALLENGE_CONTINUE
 
         # Save a screenshot of the challenge
-        path_screenshot = ""
-        try:
-            challenge_container = ctx.find_element(By.XPATH, "//body[@class='no-selection']")
+        with suppress(TimeoutError):
+            challenge_container = page.frame_locator(self.bframe).locator(
+                "//body[@class='no-selection']"
+            )
             path_screenshot = self.captcha_screenshot(challenge_container)
-        except NoSuchElementException:
-            pass
-        except WebDriverException as err:
-            logger.exception(err)
-        finally:
             q = quote(self.label, "utf8")
             logger.warning(
                 runtime_report(
@@ -614,13 +515,13 @@ class VisualChallenger(ArmorKernel):
                     label=f"「{self.label}」",
                     prompt=f"「{self.prompt}」",
                     screenshot=path_screenshot,
-                    site_link=ctx.current_url,
+                    site_link=page.url,
                     issues=f"https://github.com/QIN2DIM/hcaptcha-challenger/issues?q={q}",
                 )
             )
-            return self.CHALLENGE_BACKCALL
+        return self.CHALLENGE_BACKCALL
 
-    def anti_recaptcha(self, ctx: Chrome):
+    def anti_recaptcha(self, page: Page):
         """
         >> NOTE:
         ——————————————————————————————————————————————————————————————————————————
@@ -650,27 +551,27 @@ class VisualChallenger(ArmorKernel):
                 弹出此提示时，挑战上下文不变，即，prompts 与 images 都不会变
             - Please try again. 评分过低，重试
         """
-        if super().anti_recaptcha(ctx) is not True:
+        if super().anti_recaptcha(page) is not True:
             return
-
+        # [⚔] 注册挑战框架
         # TODO: TASK_OBJECT_DETECTION, more label
         for _ in range(3):
+            # [⚔] 跳过目标检测任务以及未准备好的分类任务
             for _ in range(10):
                 # [⚔] 获取挑战标签
-                self.get_label(ctx)
-
+                self.get_label(page)
                 if self._oncall_task == self.TASK_OBJECT_DETECTION:
-                    self.reload(ctx)
-                elif self.tactical_retreat(ctx) == self.CHALLENGE_BACKCALL:
-                    self.reload(ctx)
+                    self.reload(page)
+                elif self.tactical_retreat(page) == self.CHALLENGE_BACKCALL:
+                    self.reload(page)
                 else:
                     break
 
             model = self.select_model()
-            self.challenge(ctx, model=model)
-            self.captcha_screenshot(ctx)
-
-            if drop := self.check_accessible_status(ctx) == self.CHALLENGE_SUCCESS:
+            self.challenge(page, model=model)
+            self.captcha_screenshot(page)
+            if drop := self.check_accessible_status(page) == self.CHALLENGE_SUCCESS:
+                self._response = page.evaluate("grecaptcha.getResponse()")
                 return drop
         else:
             input("This method has not been implemented yet, press any key to exit the program.")
@@ -679,13 +580,13 @@ class VisualChallenger(ArmorKernel):
 def _request_asset(asset_download_url: str, asset_path: str):
     headers = {
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/105.0.0.0 Safari/537.36 Edg/105.0.1343.27"
+        "Chrome/105.0.0.0 Safari/537.36 Edg/105.0.1343.27"
     }
 
     # FIXME: PTC-W6004
     #  Audit required: External control of file name or path
     with open(asset_path, "wb") as file, requests.get(
-            asset_download_url, headers=headers, stream=True, proxies=getproxies()
+        asset_download_url, headers=headers, stream=True, proxies=getproxies()
     ) as response:
         for chunk in response.iter_content(chunk_size=1024):
             if chunk:
@@ -705,11 +606,11 @@ def runtime_report(action_name: str, motive: str = "RUN", message: str = "", **p
 
 
 def new_challenger(
-        style: str,
-        dir_challenge_cache: str,
-        dir_model: typing.Optional[str] = None,
-        onnx_prefix: typing.Optional[str] = None,
-        debug: typing.Optional[bool] = True,
+    style: str,
+    dir_challenge_cache: str,
+    dir_model: typing.Optional[str] = None,
+    onnx_prefix: typing.Optional[str] = None,
+    debug: typing.Optional[bool] = True,
 ) -> typing.Union[AudioChallenger, VisualChallenger]:
     # Check cache dir of challenge
     if not os.path.isdir(dir_challenge_cache):

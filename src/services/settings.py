@@ -6,7 +6,7 @@
 import os
 from os.path import join, dirname
 
-from services.utils import ToolBox
+from services.utils.toolbox import init_log
 
 # ---------------------------------------------------
 # [√]Lock the project directory
@@ -33,7 +33,7 @@ DIR_LOG = join(DIR_DATABASE, "logs")
 # ---------------------------------------------------
 # [√]Server log configuration
 # ---------------------------------------------------
-logger = ToolBox.init_log(error=join(DIR_LOG, "error.log"), runtime=join(DIR_LOG, "runtime.log"))
+logger = init_log(error=join(DIR_LOG, "error.log"), runtime=join(DIR_LOG, "runtime.log"))
 # ---------------------------------------------------
 # [√]Path completion
 # ---------------------------------------------------

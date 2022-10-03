@@ -6,7 +6,6 @@
 import typing
 
 from apis.scaffold import challenge as challenge_handler
-from apis.scaffold import install
 
 
 class Scaffold:
@@ -17,7 +16,6 @@ class Scaffold:
     @staticmethod
     def _install(model: typing.Optional[str] = None):
         """Download Project Dependencies"""
-        install.run(model=model)
 
     @staticmethod
     def challenge(silence: typing.Optional[bool] = False, style: typing.Optional[str] = None):
