@@ -3,7 +3,7 @@
     <p>🦉<i>Gracefully face reCAPTCHA challenge with ModelHub embedded solution.</i></p>
     <img src="https://img.shields.io/static/v1?message=reference&color=blue&style=for-the-badge&logo=micropython&label=python">
     <img src="https://img.shields.io/github/license/QIN2DIM/recaptcha-challenger?style=for-the-badge">
-    <a href="https://github.com/QIN2DIM/recaptcha-challenger/releases"><img src="https://img.shields.io/github/downloads/qin2dim/recaptcha-challenger/total?style=for-the-badge"></a>
+    <a href="https://github.com/QIN2DIM/hcaptcha-challenger/releases"><img src="https://img.shields.io/github/downloads/qin2dim/hcaptcha-challenger/total?style=for-the-badge"></a>
 	<br>
     <a href="https://github.com/QIN2DIM/recaptcha-challenger/"><img src="https://img.shields.io/github/stars/QIN2DIM/recaptcha-challenger?style=social"></a>
 	<a href = "https://t.me/+tJrSQ0_0ujkwZmZh"><img src="https://img.shields.io/static/v1?style=social&logo=telegram&label=chat&message=studio" ></a>
