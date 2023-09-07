@@ -307,6 +307,14 @@ class VisualChallenger(ArmorKernel):
     # mountains or hills
     # bridge
     # cars
+    # stairs
+    # 红绿灯
+    # 小轿车 机动车
+    # 人行横道 过街人行道
+    # 公交车
+    # 楼梯
+    # 棕榈树
+    # 拖拉机
     label_alias = {
         "zh": {
             "消防栓": "fire hydrant",
@@ -319,14 +327,23 @@ class VisualChallenger(ArmorKernel):
         },
         "en": {
             "a fire hydrant": "fire hydrant",
-            "traffic lights": "traffic light",
-            "car": "car",
             "bicycles": "bicycle",
-            "motorcycles": "motorcycle",
-            "bus": "bus",
             "buses": "bus",
-            "cars": "car",
+            "bus": "bus",
             "boats": "boat",
+            # "bridges": "bridge",
+            "car": "car",
+            "cars": "car",
+            # "chimneys": "chimney",
+            # "crosswalks": "crosswalk",
+            "motorcycles": "motorcycle",
+            # "mountains or hills": "mountains",
+            "traffic lights": "traffic light",
+            # "taxis": "taxi",
+            # "tractors": "tractor",
+            # "stairs": "stair",
+            # "palm trees": "tree",
+            # "vehicles",
         },
     }
 
@@ -399,20 +416,6 @@ class VisualChallenger(ArmorKernel):
         """Optimizing solutions based on different challenge labels"""
         # label_alias = self.label_alias.get(self.label)
         return self.yolo_model
-
-    def mark_samples(self, page: Page):
-        """Get the download link and locator of each challenge image"""
-        samples = page.frame_locator(self.bframe).locator("//td[@aria-label]")
-        for index in range(samples.count()):
-            fn = f"{int(time.time())}_/Challenge Image {index + 1}.png"
-            self.captcha_screenshot(samples.nth(index), name_screenshot=fn)
-            self.log("save image", fn=fn)
-        image_link = (
-            page.frame_locator(self.bframe)
-            .locator("//td[@aria-label]//img")
-            .first.get_attribute("src")
-        )
-        self.log(image_link)
 
     def check_positive_element(
         self, sample: Locator, model, screenshot: typing.Optional[bool] = False

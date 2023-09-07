@@ -1,0 +1,68 @@
+# https://python-poetry.org/docs/libraries/#versioning
+# https://pypi.org/project/recaptcha-challenger/#history
+
+[tool.poetry]
+name = "recaptcha-challenger"
+version = "0.1.0"
+description = "🦉 Gracefully face reCAPTCHA challenge with MoE(ONNX) embedded solution."
+license = "GPL-3.0-or-later"
+authors = ["QIN2DIM <yaoqinse@gmail.com>", "Bingjie Yan <bj.yan.pa@qq.com>"]
+readme = "README.md"
+homepage = "https://github.com/QIN2DIM/recaptcha-challenger"
+repository = "https://github.com/QIN2DIM/recaptcha-challenger"
+documentation = "https://github.com/QIN2DIM/recaptcha-challenger"
+keywords = ["recaptcha", "recaptcha-challenger", "recaptcha-solver"]
+packages = [{ include = "recaptcha_challenger", format = "sdist" }]
+classifiers = [
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Image Processing",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Topic :: Software Development",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Programming Language :: Python :: 3",
+]
+
+# https://python-poetry.org/docs/configuration/#virtualenvsin-project
+[virtualenvs]
+# Create a `.venv` virtual environment in the project root
+in-project = true
+
+# https://python-poetry.org/docs/pyproject/#dependencies-and-dependency-groups
+[tool.poetry.dependencies]
+python = "^3.8"
+
+# Run `poetry install` in the project root
+opencv-python = "^4.8.0.76"
+numpy = "^1.21.5"
+httpx = "^0.24.1"
+onnxruntime = "^1.15.1"
+loguru = "*"
+pyyaml = "*"
+
+# The following dependencies will not be installed
+# when you just run `poetry install` or `pip install hcaptcha-challenger`
+playwright = { version = "*", optional = true }
+
+[tool.poetry.group.test.dependencies]
+pytest = "*"
+black = "*"
+
+[tool.poetry.extras]
+# 1. Running `poetry install -E [extras]` will install the general dependencies
+# and specified dependencies at the same time.
+
+# 2. The `-E` parameter can accept multiple extras-names,
+# that is, if you only specify one extra, poetry will first uninstall the other extras installed
+# and then try to install the extra you specified
+
+# 3. Install all extra dependencies with `--all-extras`.
+
+# Developer: `poetry install -E playwright`
+# User: `pip install hcaptcha-challenger[playwright]`
+playwright = ["playwright"]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

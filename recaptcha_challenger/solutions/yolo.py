@@ -170,7 +170,18 @@ class YOLO:
 
         indices = cv2.dnn.NMSBoxes(boxes, confidences, confidence, nms_thresh)
 
-        return [str(self.classes[class_ids[i]]) for i in indices]
+        bbox = []
+        label = []
+        conf = []
+
+        for i in indices:
+            box = boxes[i]
+            x, y, w, h = box[0], box[1], box[2], box[3]
+            bbox.append([int(x), int(y), int(x + w), int(y + h)])
+            label.append(self.classes[class_ids[i]])
+            conf.append(confidences[i])
+
+        return bbox, label, conf
 
     def solution(self, img_stream: bytes, label: str, **kwargs) -> bool:
         """
@@ -192,7 +203,7 @@ class YOLO:
         img = cv2.imdecode(np_array, flags=1)
 
         try:
-            labels = self.detect_common_objects(img, confidence, nms_thresh)
+            _, labels, _ = self.detect_common_objects(img, confidence, nms_thresh)
             return bool(label in labels)
         # patch for `ValueError: attempt to get argmax of an empty sequence.`
         # at code `class_id=np.argmax(scores)`
